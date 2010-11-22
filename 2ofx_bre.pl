@@ -1,4 +1,4 @@
-#!/usr/local/bin/perl
+#!/usr/bin/env perl
 #######################################################################
 # 2OFX: Mark J Cox <mark@awe.com> 18 Nov 1999       www.awe.com/mark
 #
