@@ -1,4 +1,4 @@
-#!/usr/bin/env perl
+#!/usr/bin/env perl -wT -CIO
 #######################################################################
 # 2OFX: Mark J Cox <mark@awe.com> 18 Nov 1999       www.awe.com/mark
 #
@@ -44,7 +44,19 @@
 #         4.01 05May09: Robert Rasiewicz <robert.wk@gmail.com> - added multibank csv support (ofx only and decimal point hardcoded)
 #         4.02 24Aug10: Robert Rasiewicz <robert.wk@gmail.com> - multibank csv fix after column names change (may still be chopping the first letters)
 #         4.03 11Sep10: Robert Rasiewicz <robert.wk@gmail.com> - not chopping first letters anymore, ofx memo field value fix
+use strict;
+use utf8;
+use encoding 'utf8';
 use Digest::MD5 qw(md5_hex);
+use Encode qw (encode_utf8);
+
+my @transactions;
+my %s;
+
+my $charset		= "utf-8";
+my $language	= "POL";
+my $acctype		= "CHECKING";
+my $currency	= "PLN";
 
 sub removegunk
 {
@@ -57,11 +69,12 @@ sub removegunk
     return $line;
 }
 
-sub ofxoutput
-{
-($se,$mi,$ho,$d,$m,$y)=gmtime(time()); # can't assume strftime
-$nowdate=sprintf("%04d%02d%02d%02d%02d%02d",$y+1900,$m+1,$d,$ho,$mi,$se);
-print <<EOH;
+sub ofxoutput {
+	my ($se,$mi,$ho,$d,$m,$y) = gmtime(time()); # can't assume strftime
+
+	my $nowdate = sprintf("%04d%02d%02d%02d%02d%02d",$y+1900,$m+1,$d,$ho,$mi,$se);
+
+	print <<EOH;
 OFXHEADER:100
 DATA:OFXSGML
 VERSION:102
@@ -93,7 +106,7 @@ NEWFILEUID:NONE
 			<STMTRS>
 				<CURDEF>$currency
 				<BANKACCTFROM>
-                    <BANKID>$s{'bankid'}
+					<BANKID>$s{'bankid'}
 					<ACCTID>$s{'account'}
 					<ACCTTYPE>$acctype
 				</BANKACCTFROM>
@@ -101,28 +114,29 @@ NEWFILEUID:NONE
 					<DTSTART>$s{'from'}
 					<DTEND>$s{'to'}
 EOH
-for ($i=0;$i<$transaction;$i++) {
-# Hmm, so we have to make a unique ID.  Let's use the
-# date for now; not perfect but it will do :(
-	$unique{$t[$i]{'date'}}++;
-	print "\t<STMTTRN>\n";
-	print "\t\t<TRNTYPE>DEBIT\n" unless $t[$i]{'type'};
-	print "\t\t<TRNTYPE>$t[$i]{'type'}\n" if $t[$i]{'type'};
-	print "\t\t<DTPOSTED>$t[$i]{'date'}\n";
-	print "\t\t<FITID>".$t[$i]{'tid'}."\n";
-	print "\t\t<TRNAMT>$t[$i]{'amount'}\n";
-	print "\t\t<NAME>$t[$i]{'memo'}\n" if $t[$i]{'memo'};
-	print "\t\t<MEMO>".substr($t[$i]{'payee'},0,32)."\n";
-	print "\t</STMTTRN>\n\n";
-}
-print "\t\t\t</BANKTRANLIST>\n";
-if ($s{'balance'} ne "") {
-    print "\t\t\t<LEDGERBAL>\n";
-    print "\t\t\t\t<BALAMT>$s{'balance'}\n";
-    print "\t\t\t\t<DTASOF>$s{'to'}\n";
-    print "\t\t\t</LEDGERBAL>\n";
-}
-print <<EOH;
+
+	for (my$i=0;$i<$#transactions;$i++) {
+		print "\t<STMTTRN>\n";
+
+		print "\t\t<TRNTYPE>";
+		if ($transactions[$i]{'type'}) {
+			print $transactions[$i]{'type'};
+		} else {
+			print "DEBIT";
+		}
+		print "\n";
+
+		print "\t\t<DTPOSTED>$transactions[$i]{'date'}\n";
+		print "\t\t<FITID>$transactions[$i]{'tid'}\n";
+		print "\t\t<TRNAMT>$transactions[$i]{'amount'}\n";
+		print "\t\t<NAME>$transactions[$i]{'payee'}\n";
+		print "\t\t<MEMO>$transactions[$i]{'memo'}\n";
+		print "\t</STMTTRN>\n\n";
+	}
+
+	print "\t\t\t</BANKTRANLIST>\n";
+
+	print <<EOH;
 			</STMTRS>
 		</STMTTRNRS>
 	</BANKMSGSRSV1>
@@ -130,213 +144,168 @@ print <<EOH;
 EOH
 }
 
-sub qifoutput
-{
-    print "!Type:CCard\n";
-    for ($i=0;$i<$transaction;$i++) {
-	$d = $t[$i]{'date'};
-	printf "D%02d/%02d/%02d\n",substr($d,6,2),
-	        substr($d,4,2), substr($d,0,4)%100;
-	print "P$t[$i]{'payee'}\n";
-	print "M$t[$i]{'memo'}\n" if $t[$i]{'memo'};
-	printf "T%.2f\n^\n",$t[$i]{'amount'};
-    }
-}
-
-sub skip_lines
-{
+sub skip_lines {
     my ($lines)=@_;
-    for ($i=0;$i<($lines+1);$i++) { $_=<>; }
+    for (my $i=0; $i<($lines+1); $i++) {
+    	$_ = <>;
+    }
     return $_;
 }
-sub mbank_karta_header
-{        
-    if (/Z RACHUNKU KARTY KREDYTOWEJ/) {
-        $s{'account'} = "Karta Kredytowa";
-	    $s{'bankid'} = "BREXPLPWMUL";
-    }
 
-    if (/(\d\d\d\d)-(\d\d)-(\d\d) DO (\d\d\d\d)-(\d\d)-(\d\d)/) {
-		 
-        $fy = $1;
-        $fm = $2;
-        $fd = $3;
-        
-        $ty = $4;
-        $tm = $5;
-        $td = $6;
-	    $s{'from'} = sprintf "%04d%02d%02d", $fy,$fm,$fd;
-	    $s{'to'} = sprintf "%04d%02d%02d", $ty,$tm,$td;
-	    
-	    #$charset = "iso-8859-2";
-    }
-    $language = "POL";
-    $acctype = "CHECKING";
-    $currency = "PLN";
-    
-   
-}
-sub mbank_karta_transactions
-{
-#Nr oper.;#Data oper.;#Data ksiàg.;#Rodzaj operacji;#Szczeg¡-y operacji;#Kwota w walucie oryginalnej;#Waluta oryginalna;#Kwota w PLN;
-	
-	if    (m/(.*);(\d\d\d\d)-(\d\d)-(\d\d);\d\d\d\d-\d\d-\d\d;(.*);(.*);(.*);(.*);(.*);/)
-	{
-	    $d = $4;
-	    $m = $3;
-	    $y = $2;
-	
-	}
-	else
-	{
-		return;
-	}
-		
-
-    # remove html variations
-	$memo = $5." ".$6;
-	$amount = $9;
-
-
-	$memo =~ tr/¹æê³ñóœ¿Ÿ¥ÆÊ£ÑÓŒ¯/acelnoszzACELNOSZZ/;
-	$memo =~ s/'//g;
-
-	$amount =~ s/[^0-9,-]//g;
-	$amount =~ s/,/\./g;
-	
-	if ($memo=~ /ODSETKI/)
-	{
-		$ttype="INT";
-	}
-	elsif ($memo=~ /PRZELEW WEWN/)
-	{
-		$ttype="CREDIT";
-	}
-	elsif ($memo=~ /ZAKUP PRZY/)
-	{
-		$ttype="DEBIT";
-	}
-
-	else
-	{
-		$ttype="DEBIT";
-	}
-
-	$payee=$memo;
-	$data=sprintf "%04d%02d%02d",$y,$m,$d;
-
-    $t[$transaction]{'date'}=$data;
-    $t[$transaction]{'memo'}=$memo ;
-    $t[$transaction]{'type'}=$ttype ;
-	$t[$transaction]{'payee'} = $payee;
-    $t[$transaction]{'amount'}=$amount;
-	$t[$transaction]{'tid'} = $data."T".md5_hex($memo);
-    $transaction++;
-}
-sub mbank_pl_header
-{        
-    if (m/#Numer rachunku;/) {
-        $s{'account'} = skip_lines(0);
-		$s{'account'} =~ s/;//;
-		$s{'account'} =~ s/''//g;
-	    $s{'bankid'} = "BREXPLPWMUL";
-    }
-
-    if (m/#Za okres:;/) {
-        $period = skip_lines(0);
-		$period =~ /(\d\d)\.(\d\d)\.(\d\d\d\d);(\d\d\).\(d\d)\.(\d\d\d\d);/;
-		 #Elektroniczne zestawienie operacji za okres od \s*(\d\d\d\d)-(\d\d)-(\d\d)\s*do\s*(\d\d\d\d)-(\d\d)-(\d\d)
-		 
-        $fy = $3;
-        $fm = $2;
-        $fd = $1;
-        
-        $ty = $6;
-        $tm = $5;
-        $td = $4;
-	    $s{'from'} = sprintf "%04d%02d%02d", $fy,$fm,$fd;
-	    $s{'to'} = sprintf "%04d%02d%02d", $ty,$tm,$td;
-	    
-	    #$charset = "iso-8859-2";
-	    $language = "POL";
-	    $acctype = "CHECKING";
-    }
-    
-    if (m/Waluta;/) {
-        $currency = removegunk(skip_lines(0));
-		$currency =~ s/;//;
-    }    
-}
-
-sub mbank_pl_transactions
-{
-#Data operacji;#Data ksiêgowania;#Opis operacji;#Nazwa;#Rachunek;#Nazwa Banku;#Opis dodatkowy;#Kwota;#Saldo po operacji
-	
-	if    (m/(\d\d\d\d)-(\d\d)-(\d\d);\d\d\d\d-\d\d-\d\d;"(.*)";(.*);(.*);/)
-	{
-	    $d = $3;
-	    $m = $2;
-	    $y = $1;
-	
-	}
-	else
-	{
-		return;
-	}
-		
-
-    # remove html variations
-	$memo = $4;
-	$amount = $5;
-
-
-	$memo =~ tr/¹æê³ñóœ¿Ÿ¥ÆÊ£ÑÓŒ¯/acelnoszzACELNOSZZ/;
-	
-
-	$amount =~ s/[^0-9,-]//g;
-	$amount =~ s/,/\./g;
-	
-	if ($memo=~ /KAPITALIZACJA ODSETEK/)
-	{
-		$ttype="INT";
-	}
-	elsif ($memo=~ /WYPLATA W BANKOMACIE/)
-	{
-		$ttype="ATM";
-	}
-	elsif ($memo=~ /PODATEK OD ODSETEK KAPITALOWYCH/)
-	{
-		$ttype="DEBIT";
-	}
-	elsif ($memo=~ /KREDYT/)
-	{
-		$ttype="DEBIT";
-	}
-	elsif ($memo=~ /PRZELEW/)
-	{
-		$ttype="XFER";
-	}
-	elsif ($memo=~ /ZAKUP/)
-	{
-		$ttype="XFER";
-		$payee=$memo;
-	}
-	else
-	{
-		$ttype="DEBIT";
-	}
-
-	$payee=$memo;
-	$data=sprintf "%04d%02d%02d",$y,$m,$d;
-
-    $t[$transaction]{'date'}=$data;
-    $t[$transaction]{'memo'}=$memo ;
-    $t[$transaction]{'type'}=$ttype ;
-	$t[$transaction]{'payee'} = $payee;
-    $t[$transaction]{'amount'}=$amount;
-	$t[$transaction]{'tid'} = $data."T".md5_hex($memo);
-    $transaction++;
-}
+#sub mbank_karta_header {        
+#    if (/Z RACHUNKU KARTY KREDYTOWEJ/) {
+#        $s{'account'} = "Karta Kredytowa";
+#	    $s{'bankid'} = "BREXPLPWMUL";
+#    }
+#
+#    if (/(\d\d\d\d)-(\d\d)-(\d\d) DO (\d\d\d\d)-(\d\d)-(\d\d)/) {
+#		 
+#        $fy = $1;
+#        $fm = $2;
+#        $fd = $3;
+#        
+#        $ty = $4;
+#        $tm = $5;
+#        $td = $6;
+#	    $s{'from'} = sprintf "%04d%02d%02d", $fy,$fm,$fd;
+#	    $s{'to'} = sprintf "%04d%02d%02d", $ty,$tm,$td;
+#    }
+#    $language = "POL";
+#    $acctype = "CHECKING";
+#    $currency = "PLN";
+#    
+#   
+#}
+#sub mbank_karta_transactions
+#{
+##Nr oper.;#Data oper.;#Data ksiÅ•g.;#Rodzaj operacji;#SzczegË‡-y operacji;#Kwota w walucie oryginalnej;#Waluta oryginalna;#Kwota w PLN;
+#	
+#	if (m/(.*);(\d{4})-(\d{2})-(\d{2});\d{4}-\d{2}-\d{2};(.*);(.*);(.*);(.*);(.*);/) {
+#	    $d = $4;
+#	    $m = $3;
+#	    $y = $2;
+#	} else {
+#		return;
+#	}
+#
+#    # remove html variations
+#	$memo = $5." ".$6;
+#	$amount = $9;
+#
+#
+#	$amount =~ s/[^0-9,-]//g;
+#	$amount =~ s/,/\./g;
+#	
+#	if ($memo=~ /ODSETKI/)
+#	{
+#		$ttype="INT";
+#	}
+#	elsif ($memo=~ /PRZELEW WEWN/)
+#	{
+#		$ttype="CREDIT";
+#	}
+#	elsif ($memo=~ /ZAKUP PRZY/)
+#	{
+#		$ttype="DEBIT";
+#	}
+#
+#	else
+#	{
+#		$ttype="DEBIT";
+#	}
+#
+#	$payee=$memo;
+#	$data=sprintf "%04d%02d%02d",$y,$m,$d;
+#
+#    $transactions[$transaction]{'date'} = $data;
+#    $transactions[$transaction]{'memo'} = $memo ;
+#    $transactions[$transaction]{'type'} = $ttype ;
+#	$transactions[$transaction]{'payee'} = $payee;
+#    $transactions[$transaction]{'amount'}=$amount;
+#	$transactions[$transaction]{'tid'} = $date . "T".md5_hex($memo);
+#    $transaction++;
+#}
+#sub mbank_pl_header
+#{        
+#    if (m/#Numer rachunku;/) {
+#        $s{'account'} = skip_lines(0);
+#		$s{'account'} =~ s/;//;
+#		$s{'account'} =~ s/''//g;
+#	    $s{'bankid'} = "BREXPLPWMUL";
+#    }
+#
+#    if (m/#Za okres:;/) {
+#    	$period = skip_lines(0);
+#		$period =~ /(\d\d)\.(\d\d)\.(\d\d\d\d);(\d\d\).\(d\d)\.(\d\d\d\d);/;
+#		 #Elektroniczne zestawienie operacji za okres od \s*(\d\d\d\d)-(\d\d)-(\d\d)\s*do\s*(\d\d\d\d)-(\d\d)-(\d\d)
+#		 
+#        $fy = $3;
+#        $fm = $2;
+#        $fd = $1;
+#        
+#        $ty = $6;
+#        $tm = $5;
+#        $td = $4;
+#	    $s{'from'} = sprintf "%04d%02d%02d", $fy,$fm,$fd;
+#	    $s{'to'} = sprintf "%04d%02d%02d", $ty,$tm,$td;
+#	    
+#	    #$charset = "iso-8859-2";
+#	    $language = "POL";
+#	    $acctype = "CHECKING";
+#    }
+#    
+#    if (m/Waluta;/) {
+#        $currency = removegunk(skip_lines(0));
+#		$currency =~ s/;//;
+#    }    
+#}
+#
+#sub mbank_pl_transactions {
+#	#Data operacji;#Data ksiÄ™gowania;#Opis operacji;#Nazwa;#Rachunek;#Nazwa Banku;#Opis dodatkowy;#Kwota;#Saldo po operacji
+#	
+#	if (m/(\d\d\d\d)-(\d\d)-(\d\d);\d\d\d\d-\d\d-\d\d;"(.*)";(.*);(.*);/) {
+#	    $d = $3;
+#	    $m = $2;
+#	    $y = $1;
+#	} else {
+#		return;
+#	}
+#		
+#    # remove html variations
+#	$memo = $4;
+#	$amount = $5;
+#
+#	$amount =~ s/[^0-9,-]//g;
+#	$amount =~ s/,/\./g;
+#	
+#	if ($memo=~ /KAPITALIZACJA ODSETEK/) {
+#		$ttype="INT";
+#	} elsif ($memo=~ /WYPLATA W BANKOMACIE/) {
+#		$ttype="ATM";
+#	} elsif ($memo=~ /PODATEK OD ODSETEK KAPITALOWYCH/) {
+#		$ttype="DEBIT";
+#	} elsif ($memo=~ /KREDYT/) {
+#		$ttype="DEBIT";
+#	} elsif ($memo=~ /PRZELEW/) {
+#		$ttype="XFER";
+#	} elsif ($memo=~ /ZAKUP/) {
+#		$ttype="XFER";
+#		$payee=$memo;
+#	} else {
+#		$ttype="DEBIT";
+#	}
+#
+#	$payee=$memo;
+#	$data=sprintf "%04d%02d%02d",$y,$m,$d;
+#
+#    $transactions[$transaction]{'date'}=$data;
+#    $transactions[$transaction]{'memo'}=$memo ;
+#    $transactions[$transaction]{'type'}=$ttype ;
+#	$transactions[$transaction]{'payee'} = $payee;
+#    $transactions[$transaction]{'amount'}=$amount;
+#	$transactions[$transaction]{'tid'} = $data."T".md5_hex($memo);
+#    $transaction++;
+#}
 
 sub multibank_pl_header
 {        
@@ -348,7 +317,7 @@ sub multibank_pl_header
     }
 
     if (m/za okres:;/) {
-        $period = skip_lines(0);
+        my $period = skip_lines(0);
 		#  od 2009-04-01;od 2009-04-30;
 		#                ^^ blad w multibanku ..
 		$period =~ /(\d\d)\.(\d\d)\.(\d\d\d\d);(\d\d\).\(d\d)\.(\d\d\d\d);/;
@@ -356,9 +325,6 @@ sub multibank_pl_header
 	    $s{'from'} = substr($period,3,4) . substr($period,8,2) . substr($period,11,2);
 		$s{'to'} = substr($period,17,4) . substr($period,22,2) . substr($period,25,2);
 
-	    #$charset = "iso-8859-2";
-	    $language = "POL";
-	    $acctype = "CHECKING";
     }
     
     if (m/Waluta;/) {
@@ -367,118 +333,120 @@ sub multibank_pl_header
     }    
 }
 
-sub multibank_pl_transactions
-{	
-	if    (m/(\d\d\d\d)-(\d\d)-(\d\d);\d\d\d\d-\d\d-\d\d;"(.*)";(.*);(.*);/)
-	{
-	    $d = $3;
-	    $m = $2;
-	    $y = $1;
-	
-	}
-	else
-	{
+sub multibank_pl_transactions {	
+	if (! /^\d{4}-\d{2}-\d{2}/) {
 		return;
+	}
+
+	chomp;
+
+	$_ =~ s/\s+/ /g;
+	$_ =~ s/["']//g;
+
+	my ($op_date, $acc_date, $type, $payee, $account, $title, $amount, $balance) = split(/;/, $_);
+
+	my ($op_year, $op_month, $op_day) = split(/-/, $op_date);
+
+	my $memo;
+
+	if ($title) {
+		$memo = "$type: $title";
+	} else {
+		$memo = "$title";
 	}
 		
 
-    # remove html variations
-	$memo = $4;
-	$amount = $5;
+	if ($payee =~ /^\s*$/) {
+		if (length($memo) > 0) {
+			$payee = $title;
+		} else {
+			$payee = $type;
+		}
+	}
 
 	$amount =~ s/[^0-9,-]//g;
 	$amount =~ s/,/\./g;
+
+	my $ttype;
 	
-	if ($memo=~ /KAPITALIZACJA ODSETEK/)
-	{
+	if ($type=~ /KAPITALIZACJA ODSETEK/) {
 		$ttype="INT";
-	}
-	elsif ($memo=~ /WYP£ATA W BANKOMACIE/)
-	{
+	} elsif ($type=~ /WYPÅATA W BANKOMACIE/) {
 		$ttype="ATM";
-	}
-	elsif ($memo=~ /PODATEK OD ODSETEK KAPITA£OWYCH/)
-	{
+	} elsif ($type=~ /PODATEK OD ODSETEK KAPITAÅOWYCH/) {
 		$ttype="DEBIT";
-	}
-	elsif ($memo=~ /KREDYT/)
-	{
+	} elsif ($type=~ /KREDYT/) {
 		$ttype="DEBIT";
-	}
-	elsif ($memo=~ /PRZELEW/)
-	{
+	} elsif ($type=~ /PRZELEW/) {
 		$ttype="XFER";
-	}
-	elsif ($memo=~ /ZAKUP/)
-	{
+	} elsif ($type=~ /ZAKUP/) {
 		$ttype="XFER";
-		$payee=$memo;
-	}
-	else
-	{
+	} else {
 		$ttype="DEBIT";
 	}
-	
-	$memo =~ tr/¹æê³ñóœ¿Ÿ¥ÆÊ£ÑÓŒ¯/acelnoszzACELNOSZZ/;
-	$memo =~ s/";"";"/|/g;
-	$memo =~ s/";"/|/g;
-	$memo =~ s/''//g;
-	#$memo =~ s/|//g;
-	$idx = index $memo,"|";
-	$memo =  substr $memo, $idx + 1;
-	$memo =~ s/\Q |\E//g;
-	
-	$memo =~ s/\|//;
 
-	$idx = index $memo,"|";
-	$payee =  substr $memo, $idx + 1;
-	#$payee=$memo;
-	$data=sprintf "%04d%02d%02d",$y,$m,$d;
-
-    $t[$transaction]{'date'}=$data;
-    $t[$transaction]{'memo'}=$memo ;
-    $t[$transaction]{'type'}=$ttype ;
-	$t[$transaction]{'payee'} = $payee;
-    $t[$transaction]{'amount'}=$amount;
-	$t[$transaction]{'tid'} = $data."T".md5_hex($memo);
-    $transaction++;
+	my $date = sprintf("%04d%02d%02d", $op_year, $op_month, $op_day);
+	
+	push (@transactions,
+		{
+			'amount'	=> $amount,
+			'date'		=> $date,
+			'memo'		=> $memo,
+			'payee'		=> $payee,
+			'tid'		=> $date . "T" . md5_hex(encode_utf8($memo)),
+			'type'		=> $ttype,
+		}
+	);
 }
 
 #
 # Main
 #
-$months="JanFebMarAprMayJunJulAugSepOctNovDec";
+#$mbank_pl=0;
+#$mbank_karta=0;
+my $multibank_pl=0;
 
-
-$transaction=0;
-$charset = 1252;
-$currency = "PLN";
-$language = "ENG";
-$acctype = "CHECKING";
-$mbank_pl=0;
-$mbank_karta=0;
-$multibank_pl=0;
+my $filename = $ARGV[0];
 
 while(<>) {
-    $mbank_pl = 1 if (/Elektroniczne zestawienie operacji/ && $mbank_pl ==0 && $multibank_pl==0);
-    $mbank_pl = 2 if (/#Data operacji;#Data ksiêgowania;#Opis operacji;#Kwota;#Saldo po operacji;/ && $mbank_pl ==1);
-    mbank_pl_header() if ($mbank_pl == 1);
-    mbank_pl_transactions() if ($mbank_pl == 2);
+#    $mbank_pl = 1 if (/Elektroniczne zestawienie operacji/ && $mbank_pl ==0 && $multibank_pl==0);
+#    $mbank_pl = 2 if (/#Data operacji;#Data ksiÄ™gowania;#Opis operacji;#Kwota;#Saldo po operacji;/ && $mbank_pl ==1);
+#    mbank_pl_header() if ($mbank_pl == 1);
+#    mbank_pl_transactions() if ($mbank_pl == 2);
+#
+#    $mbank_karta = 1 if (/Z RACHUNKU KARTY KREDYTOWEJ/ && $mbank_karta ==0);
+#    $mbank_karta = 2 if (/#Nr oper.;#Data oper.;#Data ksiÄ™g.;#Rodzaj operacji;#SzczegÃ³Å‚y operacji;#Kwota w walucie oryginalnej;#Waluta oryginalna;#Kwota w PLN;/ && $mbank_karta ==1);
+#    mbank_karta_header() if ($mbank_karta == 1);
+#    mbank_karta_transactions() if ($mbank_karta == 2);
 
-    $mbank_karta = 1 if (/Z RACHUNKU KARTY KREDYTOWEJ/ && $mbank_karta ==0);
-    $mbank_karta = 2 if (/#Nr oper.;#Data oper.;#Data ksiêg.;#Rodzaj operacji;#Szczegó³y operacji;#Kwota w walucie oryginalnej;#Waluta oryginalna;#Kwota w PLN;/ && $mbank_karta ==1);
-    mbank_karta_header() if ($mbank_karta == 1);
-    mbank_karta_transactions() if ($mbank_karta == 2);
-	
-    $multibank_pl = 1 if (/MultiBank/ && $multibank_pl==0);
-    $multibank_pl = 2 if (/Elektroniczne zestawienie operacji/ && $multibank_pl==1);
-    $multibank_pl = 3 if (/Data operacji;Data ksiêgowania;Rodzaj transakcji;Dane odbiorcy/ && $multibank_pl==2);
+    if (! $multibank_pl && $_ =~ /MultiBank/) {
+    	$multibank_pl = 1;
+    	next;
+    }
+
+    if ($multibank_pl == 1 && $_ =~ /Elektroniczne zestawienie operacji/) {
+    	$multibank_pl = 2;
+    	next;
+   	}
+
+    #if ($multibank_pl == 2 && $_ =~ /Data operacji;Data ksiÄ™gowania;Rodzaj transakcji;Dane odbiorcy/) {
+    if ($multibank_pl == 2 && $_ =~ /Data operacji;Data ksi/) {
+    	$multibank_pl = 3;
+    	next;
+   	}
+
     multibank_pl_header() if ($multibank_pl == 2);
+
     multibank_pl_transactions() if ($multibank_pl == 3);
 }
-die "Didn't find anything that looked like a statement" 
-		 unless $cahoot or $egg or $amex or $eggm or $multibank_pl or $mbank_pl or $mbank_karta;
-die "Couldn't find any transactions" unless $transaction;
 
-    ofxoutput();
-exit 0;
+#die "Didn't find anything that looked like a statement" 
+#		 unless $multibank_pl or $mbank_pl or $mbank_karta;
+
+if ($#transactions > 0) {
+	ofxoutput();
+	exit(0);
+} else { 
+	die "Couldn't find any transactions";
+	exit 0;
+}
